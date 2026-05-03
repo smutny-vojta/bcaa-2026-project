@@ -1,0 +1,26 @@
+services:
+  mongo:
+    image: mongo:8
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+  app:
+    image: node:20-bookworm
+    working_dir: /app
+    command: npm run dev
+    environment:
+      - NODE_ENV=development
+      - MONGODB_URI=mongodb://mongo:27017/bcaa
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    depends_on:
+      - mongo
+
+volumes:
+  mongo-data:
