@@ -1,6 +1,6 @@
 # BCAA 2026 Project
 
-> **Upozornění:** Vývoj tohoto projektu ve frameworku Next.js byl povolem panem Ing. **Ivem Milotou**.
+> **Upozornění:** Vývoj tohoto projektu ve frameworku Next.js povolil pan **Ing. Ivo Milota**.
 
 Webová aplikace pro evidenci jízd a zpoždění postavená na Next.js a MongoDB.
 
