@@ -1,28 +1,35 @@
 "use server";
 
-import type { ListRoutesFilter, Route } from "@/features/routes/types";
+import type { Route } from "@/features/routes/types";
 import { listRoutesFilterSchema } from "@/features/routes/schema";
 import { getRoutesCollection } from "@/lib/db/collections";
-import { parseOrThrow } from "@/shared/errors";
+import { serializeRoutes } from "@/lib/db/serialize";
+import { actionClient } from "@/lib/safe-action";
 
-export async function listRoutes(filter?: ListRoutesFilter): Promise<Route[]> {
-  const parsed = parseOrThrow(listRoutesFilterSchema, filter ?? {});
-  const collection = await getRoutesCollection();
-  const query: Record<string, unknown> = {};
+export const listRoutes = actionClient
+  .inputSchema(listRoutesFilterSchema)
+  .action(
+    async ({
+      parsedInput: { archivedAt, carrier, type },
+    }): Promise<Route[]> => {
+      const collection = await getRoutesCollection();
+      const query: Record<string, unknown> = {};
 
-  if (parsed.archivedAt === true) {
-    query.archivedAt = { $ne: null };
-  } else if (parsed.archivedAt === false) {
-    query.archivedAt = null;
-  }
+      if (archivedAt === true) {
+        query.archivedAt = { $ne: null };
+      } else if (archivedAt === false) {
+        query.archivedAt = null;
+      }
 
-  if (parsed.type) {
-    query.type = parsed.type;
-  }
+      if (type) {
+        query.type = type;
+      }
 
-  if (parsed.carrier) {
-    query.carrier = parsed.carrier;
-  }
+      if (carrier) {
+        query.carrier = carrier;
+      }
 
-  return collection.find(query).toArray();
-}
+      const routes = await collection.find(query).toArray();
+      return serializeRoutes(routes);
+    },
+  );

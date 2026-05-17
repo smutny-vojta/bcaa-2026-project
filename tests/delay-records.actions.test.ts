@@ -8,6 +8,37 @@ import { deleteDelayRecord } from "@/features/delay-records/actions/deleteDelayR
 import { ErrorCode } from "@/shared/errors";
 import { resetDatabase } from "./helpers/db";
 
+type ActionResult<T> = {
+  data?: T;
+  serverError?: { message: string; code?: string } | string;
+  validationErrors?: Record<string, unknown>;
+};
+
+const unwrapAction = <T>(result: ActionResult<T> | T): T => {
+  if (result && typeof result === "object" && ("data" in result || "serverError" in result || "validationErrors" in result)) {
+    const actionResult = result as ActionResult<T>;
+    if (actionResult.serverError) {
+      const message = typeof actionResult.serverError === "string" 
+        ? actionResult.serverError 
+        : actionResult.serverError.message;
+      const error = new Error(message) as any;
+      // Extract code if available
+      if (typeof actionResult.serverError === "object" && actionResult.serverError.code) {
+        error.code = actionResult.serverError.code;
+      }
+      throw error;
+    }
+    if (actionResult.validationErrors) {
+      const error = new Error("Validation error") as any;
+      error.validationErrors = actionResult.validationErrors;
+      throw error;
+    }
+    if (actionResult.data !== undefined) {
+      return actionResult.data as T;
+  }
+  return result as T;
+};
+
 const baseStops = [
   {
     stop: "Praha hl.n.",
@@ -96,13 +127,14 @@ describe("delay records actions", () => {
       stops: baseStops,
     });
 
-    const record = await createDelayRecord({
+    const result = await createDelayRecord({
       routeId: route.id,
       tripCode: "2301",
       state: "PLANNED",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const record = unwrapAction(result);
 
     expect(record.checkpoints).toHaveLength(2);
     expect(record.checkpoints[0].arrival.actual).toBeNull();
@@ -116,29 +148,38 @@ describe("delay records actions", () => {
       stops: baseStops,
     });
 
-    const record = await createDelayRecord({
+    const result = await createDelayRecord({
       routeId: route.id,
       tripCode: "2301",
       state: "PLANNED",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const record = unwrapAction(result);
 
-    const completed = await updateDelayRecord(record.id, {
-      state: "ONGOING",
+    const completedResult = await updateDelayRecord({
+      id: record.id,
+      data: {
+        state: "ONGOING",
+      },
     });
+    const completed = unwrapAction(completedResult);
 
-    const finished = await updateDelayRecord(completed.id, {
-      state: "COMPLETED",
-      checkpoints: [
-        {
-          stop: route.stops[1].stop,
-          arrival: {
-            actual: "2026-05-02T10:15:00.000Z",
+    const finishedResult = await updateDelayRecord({
+      id: completed.id,
+      data: {
+        state: "COMPLETED",
+        checkpoints: [
+          {
+            stop: route.stops[1].stop,
+            arrival: {
+              actual: "2026-05-02T10:15:00.000Z",
+            },
           },
-        },
-      ],
+        ],
+      },
     });
+    const finished = unwrapAction(finishedResult);
 
     expect(finished.finalDelay).toBe(10);
   });
@@ -151,27 +192,35 @@ describe("delay records actions", () => {
       stops: baseStops,
     });
 
-    const record = await createDelayRecord({
+    const result = await createDelayRecord({
       routeId: route.id,
       tripCode: "2302",
       state: "PLANNED",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const record = unwrapAction(result);
 
-    await updateDelayRecord(record.id, { state: "ONGOING" });
-
-    const finished = await updateDelayRecord(record.id, {
-      state: "COMPLETED",
-      checkpoints: [
-        {
-          stop: route.stops[1].stop,
-          arrival: {
-            actual: route.stops[1].plannedDeparture,
-          },
-        },
-      ],
+    await updateDelayRecord({
+      id: record.id,
+      data: { state: "ONGOING" },
     });
+
+    const finishedResult = await updateDelayRecord({
+      id: record.id,
+      data: {
+        state: "COMPLETED",
+        checkpoints: [
+          {
+            stop: route.stops[1].stop,
+            arrival: {
+              actual: route.stops[1].plannedDeparture,
+            },
+          },
+        ],
+      },
+    });
+    const finished = unwrapAction(finishedResult);
 
     expect(finished.finalDelay).toBe(0);
   });
@@ -184,26 +233,31 @@ describe("delay records actions", () => {
       stops: baseStops,
     });
 
-    const record = await createDelayRecord({
+    const result = await createDelayRecord({
       routeId: route.id,
       tripCode: "2303",
       state: "ONGOING",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const record = unwrapAction(result);
 
     try {
-      await updateDelayRecord(record.id, {
-        state: "COMPLETED",
-        checkpoints: [
-          {
-            stop: route.stops[1].stop,
-            arrival: {
-              actual: "2026-05-02T10:00:00.000Z",
+      const updateResult = await updateDelayRecord({
+        id: record.id,
+        data: {
+          state: "COMPLETED",
+          checkpoints: [
+            {
+              stop: route.stops[1].stop,
+              arrival: {
+                actual: "2026-05-02T10:00:00.000Z",
+              },
             },
-          },
-        ],
+          ],
+        },
       });
+      unwrapAction(updateResult);
       throw new Error("Expected error");
     } catch (error) {
       const err = error as { code?: string };
@@ -213,11 +267,11 @@ describe("delay records actions", () => {
 
   it("returns not found error when delay record is missing", async () => {
     try {
-      await getDelayRecord("missing");
+      await getDelayRecord({ id: "missing" });
       throw new Error("Expected error");
     } catch (error) {
       const err = error as { code?: string };
-      expect(err.code).toBe(ErrorCode.VALIDATION_ERROR);
+      expect(err.code).toBe(ErrorCode.NOT_FOUND);
     }
   });
 
@@ -230,13 +284,14 @@ describe("delay records actions", () => {
     });
 
     try {
-      await createDelayRecord({
+      const result = await createDelayRecord({
         routeId: route.id,
         tripCode: "2301",
         state: "PLANNED",
         boardingStop: route.stops[1].stop,
         exitStop: route.stops[0].stop,
       });
+      unwrapAction(result);
       throw new Error("Expected error");
     } catch (error) {
       const err = error as { code?: string };
@@ -252,16 +307,20 @@ describe("delay records actions", () => {
       stops: baseStops,
     });
 
-    const record = await createDelayRecord({
+    const result = await createDelayRecord({
       routeId: route.id,
       tripCode: "2301",
       state: "PLANNED",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const record = unwrapAction(result);
 
     try {
-      await updateDelayRecord(record.id, { state: "COMPLETED" });
+      await updateDelayRecord({
+        id: record.id,
+        data: { state: "COMPLETED" },
+      });
       throw new Error("Expected error");
     } catch (error) {
       const err = error as { code?: string };
@@ -277,16 +336,20 @@ describe("delay records actions", () => {
       stops: baseStops,
     });
 
-    const record = await createDelayRecord({
+    const result = await createDelayRecord({
       routeId: route.id,
       tripCode: "2301",
       state: "ONGOING",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const record = unwrapAction(result);
 
     try {
-      await updateDelayRecord(record.id, { state: "COMPLETED" });
+      await updateDelayRecord({
+        id: record.id,
+        data: { state: "COMPLETED" },
+      });
       throw new Error("Expected error");
     } catch (error) {
       const err = error as { code?: string };
@@ -302,15 +365,17 @@ describe("delay records actions", () => {
       stops: pastStops,
     });
 
-    const record = await createDelayRecord({
+    const result = await createDelayRecord({
       routeId: route.id,
       tripCode: "2301",
       state: "PLANNED",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const record = unwrapAction(result);
 
-    const updated = await getDelayRecord(record.id);
+    const updatedResult = await getDelayRecord({ id: record.id });
+    const updated = unwrapAction(updatedResult);
     expect(updated?.state).toBe("ONGOING");
   });
 
@@ -323,15 +388,17 @@ describe("delay records actions", () => {
       stops: buildStopsFrom(start),
     });
 
-    const record = await createDelayRecord({
+    const result = await createDelayRecord({
       routeId: route.id,
       tripCode: "2304",
       state: "PLANNED",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const record = unwrapAction(result);
 
-    const updated = await getDelayRecord(record.id);
+    const updatedResult = await getDelayRecord({ id: record.id });
+    const updated = unwrapAction(updatedResult);
     expect(updated.state).toBe("ONGOING");
   });
 
@@ -344,15 +411,17 @@ describe("delay records actions", () => {
       stops: buildStopsFrom(start),
     });
 
-    const record = await createDelayRecord({
+    const result = await createDelayRecord({
       routeId: route.id,
       tripCode: "2305",
       state: "PLANNED",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const record = unwrapAction(result);
 
-    const updated = await getDelayRecord(record.id);
+    const updatedResult = await getDelayRecord({ id: record.id });
+    const updated = unwrapAction(updatedResult);
     expect(updated.state).toBe("PLANNED");
   });
 
@@ -372,7 +441,10 @@ describe("delay records actions", () => {
       exitStop: route.stops[1].stop,
     });
 
-    const records = await listDelayRecords({ routeId: route.id });
+    const recordsResult = await listDelayRecords({
+      filter: { routeId: route.id },
+    });
+    const records = unwrapAction(recordsResult);
     expect(records[0]?.state).toBe("ONGOING");
   });
 
@@ -391,26 +463,31 @@ describe("delay records actions", () => {
       stops: lateStops,
     });
 
-    const earlyRecord = await createDelayRecord({
+    const earlyResult = await createDelayRecord({
       routeId: earlyRoute.id,
       tripCode: "2306",
       state: "PLANNED",
       boardingStop: earlyRoute.stops[0].stop,
       exitStop: earlyRoute.stops[1].stop,
     });
+    const earlyRecord = unwrapAction(earlyResult);
 
-    const lateRecord = await createDelayRecord({
+    const lateResult = await createDelayRecord({
       routeId: lateRoute.id,
       tripCode: "2307",
       state: "PLANNED",
       boardingStop: lateRoute.stops[0].stop,
       exitStop: lateRoute.stops[1].stop,
     });
+    const lateRecord = unwrapAction(lateResult);
 
-    const records = await listDelayRecords({
-      scheduledFrom: "2026-05-15T00:00:00.000Z",
-      scheduledTo: "2026-06-15T00:00:00.000Z",
+    const recordsResult = await listDelayRecords({
+      filter: {
+        scheduledFrom: "2026-05-15T00:00:00.000Z",
+        scheduledTo: "2026-06-15T00:00:00.000Z",
+      },
     });
+    const records = unwrapAction(recordsResult);
 
     expect(records).toHaveLength(1);
     expect(records[0]?.id).toBe(lateRecord.id);
@@ -425,53 +502,70 @@ describe("delay records actions", () => {
       stops: earlyStops,
     });
 
-    const recordLow = await createDelayRecord({
+    const recordLowResult = await createDelayRecord({
       routeId: route.id,
       tripCode: "2308",
       state: "PLANNED",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const recordLow = unwrapAction(recordLowResult);
 
-    const recordHigh = await createDelayRecord({
+    const recordHighResult = await createDelayRecord({
       routeId: route.id,
       tripCode: "2309",
       state: "PLANNED",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const recordHigh = unwrapAction(recordHighResult);
 
-    await updateDelayRecord(recordLow.id, { state: "ONGOING" });
-    await updateDelayRecord(recordHigh.id, { state: "ONGOING" });
+    await updateDelayRecord({
+      id: recordLow.id,
+      data: { state: "ONGOING" },
+    });
+    await updateDelayRecord({
+      id: recordHigh.id,
+      data: { state: "ONGOING" },
+    });
 
-    await updateDelayRecord(recordLow.id, {
-      state: "COMPLETED",
-      checkpoints: [
-        {
-          stop: route.stops[1].stop,
-          arrival: {
-            actual: addMinutes(route.stops[1].plannedDeparture, 10),
+    await updateDelayRecord({
+      id: recordLow.id,
+      data: {
+        state: "COMPLETED",
+        checkpoints: [
+          {
+            stop: route.stops[1].stop,
+            arrival: {
+              actual: addMinutes(route.stops[1].plannedDeparture, 10),
+            },
           },
-        },
-      ],
+        ],
+      },
     });
 
-    await updateDelayRecord(recordHigh.id, {
-      state: "COMPLETED",
-      checkpoints: [
-        {
-          stop: route.stops[1].stop,
-          arrival: {
-            actual: addMinutes(route.stops[1].plannedDeparture, 20),
+    await updateDelayRecord({
+      id: recordHigh.id,
+      data: {
+        state: "COMPLETED",
+        checkpoints: [
+          {
+            stop: route.stops[1].stop,
+            arrival: {
+              actual: addMinutes(route.stops[1].plannedDeparture, 20),
+            },
           },
-        },
-      ],
+        ],
+      },
     });
 
-    const records = await listDelayRecords({
-      finalDelayMin: 15,
-      finalDelayMax: 25,
+    const recordsResult = await listDelayRecords({
+      filter: {
+        finalDelayMin: 15,
+        finalDelayMax: 25,
+      },
     });
+    const records = unwrapAction(recordsResult);
 
     expect(records).toHaveLength(1);
     expect(records[0]?.id).toBe(recordHigh.id);
@@ -485,23 +579,27 @@ describe("delay records actions", () => {
       stops: baseStops,
     });
 
-    const record = await createDelayRecord({
+    const result = await createDelayRecord({
       routeId: route.id,
       tripCode: "2310",
       state: "PLANNED",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const record = unwrapAction(result);
 
-    await deleteDelayRecord(record.id);
+    await deleteDelayRecord({ id: record.id });
 
-    const records = await listDelayRecords({ routeId: route.id });
+    const recordsResult = await listDelayRecords({
+      filter: { routeId: route.id },
+    });
+    const records = unwrapAction(recordsResult);
     expect(records).toHaveLength(0);
   });
 
   it("returns not found error when deleting missing record", async () => {
     try {
-      await deleteDelayRecord("missing");
+      await deleteDelayRecord({ id: "missing" });
       throw new Error("Expected error");
     } catch (error) {
       const err = error as { code?: string };
@@ -517,22 +615,26 @@ describe("delay records actions", () => {
       stops: baseStops,
     });
 
-    const record = await createDelayRecord({
+    const result = await createDelayRecord({
       routeId: route.id,
       tripCode: "2301",
       state: "ONGOING",
       boardingStop: route.stops[0].stop,
       exitStop: route.stops[1].stop,
     });
+    const record = unwrapAction(result);
 
     try {
-      await updateDelayRecord(record.id, {
-        checkpoints: [
-          {
-            stop: "Neznama",
-            arrival: { actual: "2026-05-02T10:15:00.000Z" },
-          },
-        ],
+      await updateDelayRecord({
+        id: record.id,
+        data: {
+          checkpoints: [
+            {
+              stop: "Neznama",
+              arrival: { actual: "2026-05-02T10:15:00.000Z" },
+            },
+          ],
+        },
       });
       throw new Error("Expected error");
     } catch (error) {

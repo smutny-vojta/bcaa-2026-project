@@ -1,11 +1,14 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, Figtree } from "next/font/google";
 import "./globals.css";
+import { cn } from "@/shared/utils/cn";
+import Navbar from "@/shared/components/navbar";
+import { Toaster } from "@/shared/components/ui/sonner";
+import DataResolver from "../shared/components/data-resolver";
 
-const font = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-});
+const inter = Inter({ subsets: ["latin"], variable: "--font-heading" });
+
+const figtree = Figtree({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: "TrackTrack",
@@ -18,8 +21,30 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="cs" className={`${font.variable} h-full antialiased`}>
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html
+      lang="cs"
+      className={cn(
+        "h-full",
+        "antialiased",
+        "font-sans",
+        figtree.variable,
+        inter.variable,
+      )}
+    >
+      <body className="min-h-full flex flex-col items-center">
+        <Toaster
+          theme="light"
+          position="top-center"
+          richColors
+          expand
+          closeButton
+          className="z-9999"
+        />
+        <Navbar />
+        <div className="flex-1 container py-4 flex flex-col gap-y-4">
+          <DataResolver>{children}</DataResolver>
+        </div>
+      </body>
     </html>
   );
 }

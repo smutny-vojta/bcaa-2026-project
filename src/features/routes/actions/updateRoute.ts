@@ -6,47 +6,53 @@ import {
   updateRouteInputSchema,
 } from "@/features/routes/schema";
 import { getRoutesCollection } from "@/lib/db/collections";
-import { nowUtcIso } from "@/lib/time/utc";
-import {
-  ErrorCode,
-  ErrorMessageKey,
-  parseOrThrow,
-  throwAppError,
-} from "@/shared/errors";
+import { serializeRoute } from "@/lib/db/serialize";
+import { nowUtcIso } from "@/shared/utils/time";
+import { ErrorCode, ErrorMessageKey, throwAppError } from "@/shared/errors";
+import { actionClient } from "@/lib/safe-action";
+import { revalidatePath } from "next/cache";
+import z from "zod";
+import { ObjectId } from "mongodb";
 
-export async function updateRoute(
-  id: string,
-  data: UpdateRouteInput,
-): Promise<Route> {
-  const parsedId = parseOrThrow(routeIdSchema, id);
-  const parsed = parseOrThrow(updateRouteInputSchema, data);
-  const collection = await getRoutesCollection();
-  const existing = await collection.findOne({ id: parsedId });
+const updateRouteActionInputSchema = z.object({
+  id: routeIdSchema,
+  data: updateRouteInputSchema,
+});
 
-  if (!existing) {
-    throwAppError(ErrorMessageKey.ROUTE_NOT_FOUND, ErrorCode.NOT_FOUND);
-  }
+export const updateRoute = actionClient
+  .inputSchema(updateRouteActionInputSchema)
+  .action(
+    async ({
+      parsedInput: {
+        id,
+        data: { carrier, route, stops, type },
+      },
+    }): Promise<Route> => {
+      const collection = await getRoutesCollection();
+      const existing = await collection.findOne({ _id: new ObjectId(id) });
 
-  let stops = existing.stops;
+      if (!existing) {
+        throwAppError(ErrorMessageKey.ROUTE_NOT_FOUND, ErrorCode.NOT_FOUND);
+      }
 
-  if (parsed.stops) {
-    stops = parsed.stops.map((stop, index) => ({
-      index,
-      stop: stop.stop,
-      plannedArrival: stop.plannedArrival,
-      plannedDeparture: stop.plannedDeparture,
-    }));
-  }
+      const nextStops = stops?.map((stop, index) => ({
+        index,
+        stop: stop.stop,
+        plannedArrival: stop.plannedArrival,
+        plannedDeparture: stop.plannedDeparture,
+      }));
 
-  const updated: Route = {
-    ...existing,
-    type: parsed.type ?? existing.type,
-    route: parsed.route ?? existing.route,
-    carrier: parsed.carrier ?? existing.carrier,
-    stops,
-    updatedAt: nowUtcIso(),
-  };
+      const updated: Route = {
+        ...existing,
+        type: type ?? existing.type,
+        route: route ?? existing.route,
+        carrier: carrier ?? existing.carrier,
+        stops: nextStops ?? existing.stops,
+        updatedAt: nowUtcIso(),
+      };
 
-  await collection.updateOne({ id: parsedId }, { $set: updated });
-  return updated;
-}
+      await collection.updateOne({ _id: new ObjectId(id) }, { $set: updated });
+      revalidatePath("/routes");
+      return serializeRoute(updated);
+    },
+  );
